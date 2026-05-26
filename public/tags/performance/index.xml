@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Performance on Shashank Joshi</title>
+    <link>http://localhost:1313/tags/performance/</link>
+    <description>Recent content in Performance on Shashank Joshi</description>
+    <generator>Hugo</generator>
+    <language>en-us</language>
+    <lastBuildDate>Tue, 26 May 2026 00:00:00 +0000</lastBuildDate>
+    <atom:link href="http://localhost:1313/tags/performance/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>VortexKV: a multithreaded key-value store in C&#43;&#43;20</title>
+      <link>http://localhost:1313/posts/vortexkv/</link>
+      <pubDate>Tue, 26 May 2026 00:00:00 +0000</pubDate>
+      <guid>http://localhost:1313/posts/vortexkv/</guid>
+      <description>How a specialized, shared-nothing KV store hits 9.9M pipelined GETs/sec — 3.7× faster than Dragonfly — and the engineering decisions behind it.</description>
+    </item>
+  </channel>
+</rss>

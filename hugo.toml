@@ -1,0 +1,34 @@
+baseURL = "https://shashank2602.github.io/"
+locale = "en-us"
+title = "Shashank Joshi"
+theme = "PaperMod"
+
+[params]
+  defaultTheme = "auto"          # auto = follows the visitor's OS light/dark setting
+  ShowReadingTime = true
+  ShowShareButtons = true
+  ShowCodeCopyButtons = true
+  ShowToc = true                 # table of contents on long posts
+  homeInfoParams.Title = "Shashank Joshi"
+  homeInfoParams.Content = "Senior C++ engineer. I build fast systems and write about how. 5+ years of experience; currently open to C++ roles."
+
+  [[params.socialIcons]]
+    name = "github"
+    url = "https://github.com/shashank2602"
+  [[params.socialIcons]]
+    name = "linkedin"
+    url = "https://www.linkedin.com/in/shashank26/"
+  [[params.socialIcons]]
+    name = "email"
+    url = "mailto:shashankjoshi2602@gmail.com"
+
+[[menu.main]]
+  identifier = "posts"
+  name = "Posts"
+  url = "/posts/"
+  weight = 10
+[[menu.main]]
+  identifier = "about"
+  name = "About"
+  url = "/about/"
+  weight = 20

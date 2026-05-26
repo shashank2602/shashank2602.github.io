@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en" dir="auto" data-theme="auto">
+
+<head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta name="robots" content="noindex, nofollow">
+<title>VortexKV: a multithreaded key-value store in C&#43;&#43;20 | Shashank Joshi</title>
+<meta name="keywords" content="cpp, systems, performance, databases">
+<meta name="description" content="How a specialized, shared-nothing KV store hits 9.9M pipelined GETs/sec — 3.7× faster than Dragonfly — and the engineering decisions behind it.">
+<meta name="author" content="">
+<link rel="canonical" href="http://localhost:1313/posts/vortexkv/">
+<link crossorigin="anonymous" href="/assets/css/stylesheet.89ca4972ab5e6aaa05e9a0dae0c4bb64b26585bc79e36f5cf33614eea0283abe.css" integrity="sha256-icpJcqteaqoF6aDa4MS7ZLJlhbx5429c8zYU7qAoOr4=" rel="preload stylesheet" as="style">
+<link rel="icon" href="http://localhost:1313/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="http://localhost:1313/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="http://localhost:1313/favicon-32x32.png">
+<link rel="apple-touch-icon" href="http://localhost:1313/apple-touch-icon.png">
+<link rel="mask-icon" href="http://localhost:1313/safari-pinned-tab.svg">
+<meta name="theme-color" content="#2e2e33">
+<meta name="msapplication-TileColor" content="#2e2e33">
+<link rel="alternate" hreflang="en" href="http://localhost:1313/posts/vortexkv/">
+<noscript>
+    <style>
+        #theme-toggle,
+        .top-link {
+            display: none;
+        }
+
+    </style>
+    <style>
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --theme: rgb(29, 30, 32);
+                --entry: rgb(46, 46, 51);
+                --primary: rgb(218, 218, 219);
+                --secondary: rgb(155, 156, 157);
+                --tertiary: rgb(65, 66, 68);
+                --content: rgb(196, 196, 197);
+                --code-block-bg: rgb(46, 46, 51);
+                --code-bg: rgb(55, 56, 62);
+                --border: rgb(51, 51, 51);
+                color-scheme: dark;
+            }
+
+            .list {
+                background: var(--theme);
+            }
+
+            .toc {
+                background: var(--entry);
+            }
+        }
+
+    </style>
+</noscript>
+<script>
+    if (localStorage.getItem("pref-theme") === "dark") {
+        document.querySelector("html").dataset.theme = 'dark';
+    } else if (localStorage.getItem("pref-theme") === "light") {
+       document.querySelector("html").dataset.theme = 'light';
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.querySelector("html").dataset.theme = 'dark';
+    } else {
+        document.querySelector("html").dataset.theme = 'light';
+    }
+
+</script>
+</head>
+<body id="top">
+    <header class="header">
+    <nav class="header-nav">
+        <div class="logo">
+            <a href="http://localhost:1313/" accesskey="h" title="Shashank Joshi (Alt + H)">Shashank Joshi</a>
+            <div class="logo-switches">
+                <button id="theme-toggle" class="theme-toggle" accesskey="t" title="(Alt + T)" aria-label="Toggle theme">
+                    <svg class="moon" xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg class="sun" xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <ul id="menu" class="menu">
+            <li>
+                <a href="http://localhost:1313/posts/" title="Posts">
+                    <span>Posts</span>
+                </a>
+            </li>
+            <li>
+                <a href="http://localhost:1313/about/" title="About">
+                    <span>About</span>
+                </a>
+            </li>
+        </ul>
+    </nav>
+</header>
+<main class="main">
+
+<article class="post-single">
+  <header class="post-header">
+    
+    <h1 class="post-title entry-hint-parent">
+      VortexKV: a multithreaded key-value store in C&#43;&#43;20
+    </h1>
+    <div class="post-meta">
+
+<span title='2026-05-26 00:00:00 +0000 UTC'>May 26, 2026</span>&nbsp;·&nbsp;<span>20 min</span>
+
+</div>
+  </header> <details class="toc" >
+    <summary accesskey="c" title="(Alt + C)">
+        <span class="title">Table of Contents</span>
+    </summary>
+
+    <div class="inner"><ul>
+            <li>
+                <a href="#why-i-built-it" aria-label="Why I built it">Why I built it</a></li>
+            <li>
+                <a href="#the-single-threaded-foundation" aria-label="The single-threaded foundation">The single-threaded foundation</a></li>
+            <li>
+                <a href="#the-core-storage-engine" aria-label="The core: storage engine">The core: storage engine</a></li>
+            <li>
+                <a href="#hitting-the-wall" aria-label="Hitting the wall">Hitting the wall</a></li>
+            <li>
+                <a href="#the-shared-nothing-design" aria-label="The shared-nothing design">The shared-nothing design</a></li>
+            <li>
+                <a href="#benchmarks" aria-label="Benchmarks">Benchmarks</a><ul>
+                    
+            <li>
+                <a href="#test-environment" aria-label="Test environment">Test environment</a></li>
+            <li>
+                <a href="#server-configurations" aria-label="Server configurations">Server configurations</a></li>
+            <li>
+                <a href="#without-pipelining" aria-label="Without pipelining">Without pipelining</a></li>
+            <li>
+                <a href="#with-pipelining" aria-label="With pipelining">With pipelining</a></li>
+            <li>
+                <a href="#an-anomaly-worth-chasing-why-were-writes-outpacing-reads" aria-label="An anomaly worth chasing: why were writes outpacing reads?">An anomaly worth chasing: why were writes outpacing reads?</a></li>
+            <li>
+                <a href="#scaling" aria-label="Scaling">Scaling</a></li></ul>
+            </li>
+            <li>
+                <a href="#limitations" aria-label="Limitations">Limitations</a></li>
+            <li>
+                <a href="#try-it-yourself" aria-label="Try it yourself">Try it yourself</a>
+            </li>
+        </ul>
+    </div>
+</details>
+
+  <div class="post-content md-content"><p>On a 64-vCPU EPYC, my key-value store does 9.9 million pipelined GETs per second — 3.7× more than Dragonfly, the fastest multi-threaded Redis alternative on the market. Dragonfly is built by a seasoned team and backed by years of work. So how does a single person&rsquo;s side project beat it on this benchmark? The short answer is specialization — and the long answer is the rest of this post.</p>
+<h2 id="why-i-built-it">Why I built it<a hidden class="anchor" aria-hidden="true" href="#why-i-built-it">#</a></h2>
+<p>Last December, I was itching to build something from scratch. I had no idea what it would be, just that it had to be different, at least in some ways. After some research, I decided to make a KV store. I&rsquo;d used Redis before, so I wasn&rsquo;t a stranger to in-memory caches — but using something is quite different from building it. I didn&rsquo;t want to follow any guide, of which there are plenty, since I felt it might cause me to fixate on the design decisions from the tutorial. So I decided to do my own research. I did settle on the RESP protocol early, for Redis client compatibility.</p>
+<p>Now the big question: how to make it different? Well, since I&rsquo;m a C++ developer, why not try making it faster than the competition? That&rsquo;s not so easy either — the most popular KVs (Redis, memcached, Dragonfly) are written in C or C++, so language alone doesn&rsquo;t give me any performance boost. There&rsquo;s one thing I <em>can</em> do to beat industry leaders: make it more performant through <strong>specialization</strong>. Popular products, even though developed over years or even decades by a group of very smart people, have to support a wide variety of features, and these come at a cost.</p>
+<h2 id="the-single-threaded-foundation">The single-threaded foundation<a hidden class="anchor" aria-hidden="true" href="#the-single-threaded-foundation">#</a></h2>
+<p>My initial plan was to make a single-threaded version. Why? Because of relative simplicity. I didn&rsquo;t want multithreading to prevent me from creating a solid foundation. And that&rsquo;s exactly what I did with RapidKV — a single-threaded store that already beat Redis by 4.2×. (It&rsquo;s still up on GitHub if you want the single-threaded story in isolation, but everything that matters carries forward into what came next.)</p>
+<p>For the first iteration of this project, everything ran on a single thread: the network IO, the parsing, the memory reads/writes — similar to Redis (though they&rsquo;ve recently introduced separate IO threads). I wrote the code in such a way that it would make it easier to transition to a multithreaded system.</p>
+<h2 id="the-core-storage-engine">The core: storage engine<a hidden class="anchor" aria-hidden="true" href="#the-core-storage-engine">#</a></h2>
+<p>It was essential that I create a fast storage engine, since that would be the backbone of the system. Modern systems rely heavily on CPU caches for their speed, so if I could choose data structures that take full advantage of these, I could see a performance improvement. The core of this storage engine is a hash table, which stores the actual KV entries.</p>
+<p>Most implementations of hash tables (like C++&rsquo;s <code>std::unordered_map</code>) use separate chaining. While this has its advantages, it also comes at the cost of poor cache locality. Since each entry is its own separate node, each pointer jump risks a cache miss. So if you need to probe, say, 4 times for an entry, the CPU will read 4 separate 64-byte cache lines that can be scattered across memory. This leads to poor performance. This is what Redis uses. The other end of the spectrum is open addressing, where everything is laid out sequentially, and CPUs love sequential data because of the excellent cache usage. This does come with its own disadvantages, but if you want speed, it&rsquo;s the right choice. Dragonfly, by comparison, uses a hybrid approach: their hash table uses separate nodes, but each node is a mini open-addressing hash table itself. So they created an excellent data structure that&rsquo;s faster than the Redis dict while also using less memory. I, on the other hand, went all-in on an open-addressing implementation (Robin Hood), since that should still give the best performance — but comes at the cost of higher memory usage.</p>
+<p>The open-addressing implementation I went with is called Robin Hood hashing (my implementation is called FlatMap). After my research, this seemed to serve my purpose best: excellent cache performance with great average seek times. Here&rsquo;s how it works — on a collision, we linearly probe and start checking consecutive slots. Either we find an empty slot, or in the case of an occupied slot we check if the new key is farther away from its home than the current key occupying the slot. If it is, we &ldquo;rob&rdquo; the slot from that key and displace it forward.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">if</span> (newEntryMetadata.psl <span style="color:#f92672">&gt;</span> m_table.metadata[keyPos].psl)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    std<span style="color:#f92672">::</span>swap(key, m_table.keys[keyPos]);
+</span></span><span style="display:flex;"><span>    std<span style="color:#f92672">::</span>swap(value, m_table.values[keyPos]);
+</span></span><span style="display:flex;"><span>    std<span style="color:#f92672">::</span>swap(newEntryMetadata, m_table.metadata[keyPos]);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>And we keep doing this until we reach an empty slot.</p>
+<p>What this does, compared to simple linear probing, is dramatically reduce the variance in probe length. In my testing, even with millions of keys, the average probe length turned out to be around 1 (0 being its home) even at a high load factor of 0.85. These are excellent results. Even the max probe length (worst-case scenario), over tens of iterations with millions of keys, the longest I got was in the 20s.</p>
+<p>Because of the Structure-of-Arrays (SoA) design, the metadata is packed into just 2 bytes per entry. This allows up to 32 entries to reside within a single 64-byte cache line. Consequently, worst-case probes require fetching at most two cache lines to scan the metadata, filtering out 99% of unnecessary key comparisons before the heavier key/value arrays are ever accessed.</p>
+<p>Resizing is handled incrementally rather than stop-the-world, to avoid the latency spikes a bulk rehash would cause — there&rsquo;s enough there for its own post.</p>
+<p>Now let&rsquo;s come to what the FlatMap stores in its keys and values. While my initial plan was to support many more data types, I focused on getting two types right — integers and strings — rather than many types half-done. Integers are stored as-is, but the big question was: can I optimize the strings somehow? There are three ways I could think of: make the size of the object as small as possible for better cache performance and move-ability (remember, we need to move objects around in Robin Hood); some level of inlining of data, called Small String Optimization (SSO), to reduce pointer jumps and therefore improve cache performance; and lastly a custom allocator that doesn&rsquo;t fragment the heap for every new string allocation. C++&rsquo;s default <code>std::string</code> isn&rsquo;t bad, but object size varies between implementations from 24–32 bytes, and so does the SSO length. For full control I needed to write something from scratch. For comparison, both Redis and Dragonfly employ some form of SSO — for Redis this SSO still requires a pointer dereference, and for Dragonfly it&rsquo;s completely inline.</p>
+<p>This is what I decided on: a custom 16-byte string called CompactString that inlines data for size ≤ 15 and falls back to a custom slab allocator for larger sizes. Since the size is exactly 16 bytes and it&rsquo;s aligned to 16 bytes, 4 of these can fit in a single cache line. That means in the best case, for small strings in our table, a single read has 4 strings in contiguous memory — no pointer jump needed. And even if the size is larger and heap allocation is required, the slab allocator can allocate and deallocate memory in O(1) time, making for an extremely fast string type. This custom string type is 3.6× faster than <code>std::string</code> for construction, 1.8× faster for access, and a blazing 5.8× faster for move operations.</p>
+<p>So what happens when we combine this new CompactString with our FlatMap? We get 2.5× faster insertions than <code>std::unordered_map</code> with <code>std::string</code>, 2× faster lookups, and 2.6× faster deletions.</p>
+<blockquote>
+<p><em>These micro-benchmarks are part of the repo.</em></p>
+</blockquote>
+<p>This wraps up the core storage engine. Now let&rsquo;s see the overall single-threaded architecture and get a better understanding of the other components.</p>
+<p><img alt="Single-threaded architecture" loading="lazy" src="/images/single_threaded_architecture.svg"></p>
+<p>Let&rsquo;s start with Asio. This is the part of the system responsible for managing TCP connections and IO; it fires when data is read and when data has been written to the network buffer. This is managed by the <code>io_context</code> event loop. One thread here is doing all the work — whenever a connection receives a request, the event loop wakes up the thread. It then does the reading, parsing, executing, and writing. Reading and writing operations are both async. Once the writing completes, we start all over again. All the connections reside in the server class.</p>
+<p>The crucial part of the system is IO. A system handicapped by IO cannot be scaled properly, no matter how many cores you throw at it. When you&rsquo;re doing millions of operations per second, it&rsquo;s necessary to reduce as many copies and allocations in the pipeline as you can, since these dirty the CPU caches and use up memory bandwidth — other than, of course, just wasting CPU cycles. And that&rsquo;s exactly what I did: the input data that&rsquo;s read into the network buffer is used as-is to create commands using <code>string_view</code>, and passed directly to the storage layer to be stored in the hash tables. Similarly, when writing output, it&rsquo;s written directly to the network buffer; any formatting required (like integer-to-string) is done using preallocated stack buffers. So the protocol (RESP) parsing is zero-copy, and protocol writing is zero-allocation.</p>
+<p>Both the input and output buffers use a custom linear buffer with compaction, with the output buffer actually consisting of two buffers — one used to write to the network while the other collects responses. This means writes never stall. (When I moved onto the multithreaded architecture, there was an extra copy step that needed to be added — but I&rsquo;ll explain that later.)</p>
+<p>A micro-optimization in the IO path is an integer-packed command dispatcher. Command dispatch avoids string comparison entirely: each command name (up to 8 bytes) is folded to uppercase and packed into a single <code>uint64_t</code>, so matching an incoming command against the table is a handful of integer comparisons instead of repeated string compares on the hot path.</p>
+<p>This results in an IO path that scales incredibly well even on a single thread with pipelining, leaving Redis far behind as the pipelining depth goes up. (Pipelining here means sending N requests at a time.)</p>
+<p>At pipelining = 500, this version achieves a whopping 8 million ops/sec, compared to Redis&rsquo;s 1.9 million — and that&rsquo;s while having 1/5th the p99 latency of Redis (tested on a Ryzen 4800H). Now, I know a pipeline depth of 500 is very high and at the extreme end of realistic values, but it&rsquo;s meant to show the maximum throughput you could get out of this system. And yes, pipelining this deep is used in some real workloads.</p>
+<p>Some design choices made early on, with the multithreaded future of this project in mind, include the thread-local slab allocator, no global shared resource/mutex, and a self-contained connection object.</p>
+<h2 id="hitting-the-wall">Hitting the wall<a hidden class="anchor" aria-hidden="true" href="#hitting-the-wall">#</a></h2>
+<p>Hitting high throughput with pipelining has its use cases, but without pipelining you&rsquo;re still severely limited on throughput compared to multithreaded counterparts. Those extra cores on the machine are sitting idle. To use them, we have to somehow divide the incoming work across multiple threads. One basic solution is to create N worker threads that access the hash table protected by a lock. While this may perform better than the single-threaded version, it&rsquo;ll scale very poorly — since all the threads are accessing the same data structure, there&rsquo;s going to be heavy lock contention.</p>
+<p>A better approach is fine-grained locking, something memcached uses. Essentially, instead of one global lock, you create many small specific locks that each protect separate segments of the hash table. This minimizes lock contention and can result in good throughput scaling — but only up to a point. As the thread count increases, you start running into the same problem again: a higher thread count means higher chances of multiple threads hitting the same locked segment, and so we have the same issue. It goes from near-linear scaling in the beginning to flatlining at higher thread counts.</p>
+<p>So what&rsquo;s the answer? It&rsquo;s called a shared-nothing design, and it&rsquo;s used by Dragonfly — for good reason, since it allows for maximum throughput. Let&rsquo;s get into the details.</p>
+<h2 id="the-shared-nothing-design">The shared-nothing design<a hidden class="anchor" aria-hidden="true" href="#the-shared-nothing-design">#</a></h2>
+<p><img alt="Shared-nothing multithreaded architecture" loading="lazy" src="/images/multithreaded_architecture.svg"></p>
+<p>In simple terms, we take the one hash table we had and split it into N tables, where N is the number of threads. Each of these N tables, enclosed in an independent entity called a shard, owns a different part of the key space. The distribution is decided using a hash function, with uniform keys resulting in uniform distribution across the N shards. These shards run their own separate event loop in their own separate thread. The shards are cache-line aligned to prevent false sharing, and each shard&rsquo;s thread is pinned to a dedicated CPU core for optimal cache locality.</p>
+<p>But now the question is: who takes care of the IO — the main thread, or separate threads? It&rsquo;s the shards themselves. Whenever a new connection is made, it&rsquo;s assigned to one of the shards in round-robin fashion.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#75715e">// hash the key, then a fast modulo (via libdivide) gives the owning shard
+</span></span></span><span style="display:flex;"><span><span style="color:#66d9ef">uint64_t</span> hash     <span style="color:#f92672">=</span> rapidhash_withSeed(request.arguments[<span style="color:#ae81ff">0</span>].data(),
+</span></span><span style="display:flex;"><span>                                       request.arguments[<span style="color:#ae81ff">0</span>].size(),
+</span></span><span style="display:flex;"><span>                                       m_routingHashSeed);
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">uint64_t</span> quotient <span style="color:#f92672">=</span> hash <span style="color:#f92672">/</span> m_fastModDivisor;
+</span></span><span style="display:flex;"><span>targetShardId     <span style="color:#f92672">=</span> hash <span style="color:#f92672">-</span> (quotient <span style="color:#f92672">*</span> m_shardPool.size());
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">if</span> (targetShardId <span style="color:#f92672">==</span> m_shardId)
+</span></span><span style="display:flex;"><span>    m_dispatcher.dispatch(request, m_database, response);          <span style="color:#75715e">// local: inline fast path
+</span></span></span><span style="display:flex;"><span><span style="color:#66d9ef">else</span>
+</span></span><span style="display:flex;"><span>    m_shardPool[targetShardId]<span style="color:#f92672">-&gt;</span>ExecuteRemote(std<span style="color:#f92672">::</span>move(request), <span style="color:#75715e">/* ... */</span>);  <span style="color:#75715e">// remote: post to owner
+</span></span></span></code></pre></div><p>So whenever a connection gets a request, we calculate the hash of the key using rapidhash (one of the fastest non-cryptographic hashes), then calculate the fast modulo using libdivide. This gives us the shard ID where the key resides.</p>
+<p>Now there are two possibilities: either the key it requests is in the same shard, or in a different shard. If it&rsquo;s the same shard, the command is executed inline in a fast path. If it&rsquo;s in a different shard, we post this request to the target shard. Once the target shard executes the command asynchronously, it notifies the local shard, and we write to the network buffer.</p>
+<p>Now the problem: what happens with pipelined requests? Since these requests can be spread across the shards, they can complete in a random order. Since a client expects pipelined responses back in the same order it sent them, we need to enforce strict ordering of the responses. This is done using request indexes — each request&rsquo;s response is written by the local or remote shard into its own buffer, and each shard posts its completion to the local shard. Once all responses are accounted for, they&rsquo;re copied to the network buffer in their respective order. And because of this ordering requirement, there&rsquo;s an extra copy in the multithreaded architecture.</p>
+<p>So how are cross-shard requests handled internally? When we want to access data in a remote shard, we post the request to the target shard. The target shard stores this request in its own task queue (managed by Asio&rsquo;s <code>io_context</code>), and all the requests coming from different shards are queued up here and executed one by one. The hash table itself doesn&rsquo;t have any form of locking mechanism on it. Similarly, when a target shard has executed a caller&rsquo;s request, it posts the completion notification to the caller shard, which again means a completion callback is inserted into the caller&rsquo;s queue.</p>
+<p>So while there&rsquo;s no locking mechanism on the hash table itself, the task queue still needs to be protected from corruption by multiple threads. Asio&rsquo;s <code>io_context</code> internally uses locks to ensure this thread safety.</p>
+<p>There&rsquo;s one additional challenge with cross-shard ops. Each cross-shard op requires a small heap allocation to store the callback — and here&rsquo;s the nasty part: the allocation and deallocation happen on different threads. Shard A allocates the callback, shard B frees it. Then B allocates the completion callback, and A frees it. This is the textbook worst case for a thread-local allocator. My slab allocator assumes alloc and free happen on the same thread — it has no safe answer for a cross-thread free. So I couldn&rsquo;t use it on this path. That leaves two additional heap allocations per cross-shard op (and as shard count increases, so do the cross-shard ops) routed through the generic allocator. That&rsquo;s exactly why I chose mimalloc: it&rsquo;s designed so that freeing memory on a different thread than it was allocated on is cheap. Using it gave me roughly a 20% boost in throughput.</p>
+<p>So what does all this achieve? A system that keeps on scaling even at very high thread counts. Let&rsquo;s see the results.</p>
+<h2 id="benchmarks">Benchmarks<a hidden class="anchor" aria-hidden="true" href="#benchmarks">#</a></h2>
+<h3 id="test-environment">Test environment<a hidden class="anchor" aria-hidden="true" href="#test-environment">#</a></h3>
+<table>
+  <thead>
+      <tr>
+          <th>Component</th>
+          <th>Details</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><strong>CPU</strong></td>
+          <td>AMD EPYC 9554P (64C / 128T)</td>
+      </tr>
+      <tr>
+          <td><strong>Server cores</strong></td>
+          <td>64 threads pinned to cores 0–63</td>
+      </tr>
+      <tr>
+          <td><strong>Benchmark cores</strong></td>
+          <td>64 threads pinned to cores 64–127 via <code>taskset -c 64-127</code></td>
+      </tr>
+      <tr>
+          <td><strong>Benchmark tool</strong></td>
+          <td><code>memtier_benchmark</code></td>
+      </tr>
+      <tr>
+          <td><strong>Value size</strong></td>
+          <td>256 bytes</td>
+      </tr>
+      <tr>
+          <td><strong>Key range</strong></td>
+          <td>1–10,000,000</td>
+      </tr>
+  </tbody>
+</table>
+<h3 id="server-configurations">Server configurations<a hidden class="anchor" aria-hidden="true" href="#server-configurations">#</a></h3>
+<table>
+  <thead>
+      <tr>
+          <th>Server</th>
+          <th>Launch command</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><strong>Redis</strong></td>
+          <td><code>redis-server --save &quot;&quot; --appendonly no</code></td>
+      </tr>
+      <tr>
+          <td><strong>Dragonfly</strong></td>
+          <td><code>dragonfly --dbfilename &quot;&quot; --snapshot_cron &quot;&quot; --cache_mode=true --version_check=false --proactor_threads=64</code></td>
+      </tr>
+      <tr>
+          <td><strong>VortexKV</strong></td>
+          <td><code>./VortexKV VortexKV.config</code> (64 shards)</td>
+      </tr>
+  </tbody>
+</table>
+<blockquote>
+<p>All three servers ran on the same bare-metal machine. Redis had all persistence disabled; Dragonfly ran in cache mode with snapshots disabled. Servers were restarted between runs for a clean state.</p>
+</blockquote>
+<h3 id="without-pipelining">Without pipelining<a hidden class="anchor" aria-hidden="true" href="#without-pipelining">#</a></h3>
+<p><strong>SET throughput (no pipeline)</strong> — 64 threads × 10 connections · ratio 1:0 (SET only) · 256B values · 100 seconds</p>
+<table>
+  <thead>
+      <tr>
+          <th>Metric</th>
+          <th>Redis</th>
+          <th>Dragonfly</th>
+          <th>VortexKV</th>
+          <th>vs Redis</th>
+          <th>vs Dragonfly</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><strong>Ops/sec</strong></td>
+          <td>66,631</td>
+          <td>2,489,825</td>
+          <td><strong>2,575,169</strong></td>
+          <td><strong>38.6×</strong></td>
+          <td><strong>+3.4%</strong></td>
+      </tr>
+      <tr>
+          <td><strong>Avg latency</strong></td>
+          <td>9.508 ms</td>
+          <td>0.254 ms</td>
+          <td><strong>0.248 ms</strong></td>
+          <td><strong>−97.4%</strong></td>
+          <td><strong>−2.4%</strong></td>
+      </tr>
+      <tr>
+          <td><strong>p99 latency</strong></td>
+          <td>11.967 ms</td>
+          <td>0.351 ms</td>
+          <td><strong>0.343 ms</strong></td>
+          <td><strong>−97.1%</strong></td>
+          <td><strong>−2.3%</strong></td>
+      </tr>
+  </tbody>
+</table>
+<p><strong>GET throughput (no pipeline, pre-populated)</strong> — 64 threads × 10 connections · ratio 0:1 (GET only) · 256B values · 100 seconds · 10M keys pre-populated</p>
+<table>
+  <thead>
+      <tr>
+          <th>Metric</th>
+          <th>Redis</th>
+          <th>Dragonfly</th>
+          <th>VortexKV</th>
+          <th>vs Redis</th>
+          <th>vs Dragonfly</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><strong>Ops/sec</strong></td>
+          <td>70,780</td>
+          <td>2,552,889</td>
+          <td>2,541,428</td>
+          <td><strong>35.9×</strong></td>
+          <td>−0.4%</td>
+      </tr>
+      <tr>
+          <td><strong>Avg latency</strong></td>
+          <td>9.131 ms</td>
+          <td>0.253 ms</td>
+          <td><strong>0.249 ms</strong></td>
+          <td><strong>−97.3%</strong></td>
+          <td><strong>−1.6%</strong></td>
+      </tr>
+      <tr>
+          <td><strong>p99 latency</strong></td>
+          <td>9.407 ms</td>
+          <td>0.351 ms</td>
+          <td><strong>0.343 ms</strong></td>
+          <td><strong>−96.4%</strong></td>
+          <td><strong>−2.3%</strong></td>
+      </tr>
+  </tbody>
+</table>
+<blockquote>
+<p><strong>Takeaway:</strong> Without pipelining, VortexKV and Dragonfly are effectively neck-and-neck at ~2.5M ops/sec — both ~36× faster than single-threaded Redis. VortexKV holds a slight latency edge, while Dragonfly is fractionally ahead on raw GET throughput (−0.4%).</p>
+</blockquote>
+<h3 id="with-pipelining">With pipelining<a hidden class="anchor" aria-hidden="true" href="#with-pipelining">#</a></h3>
+<p><strong>Pipelined SET (pipeline = 30)</strong> — 64 threads × 10 connections · pipeline = 30 · ratio 1:0 · 256B values · 200K requests/client</p>
+<table>
+  <thead>
+      <tr>
+          <th>Metric</th>
+          <th>Redis †</th>
+          <th>Dragonfly</th>
+          <th>VortexKV</th>
+          <th>vs Redis</th>
+          <th>vs Dragonfly</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><strong>Ops/sec</strong></td>
+          <td>567,642</td>
+          <td>7,417,396</td>
+          <td><strong>11,880,297</strong></td>
+          <td><strong>20.9×</strong></td>
+          <td><strong>+60.2%</strong></td>
+      </tr>
+      <tr>
+          <td><strong>Avg latency</strong></td>
+          <td>8.298 ms</td>
+          <td>2.358 ms</td>
+          <td><strong>1.769 ms</strong></td>
+          <td><strong>−78.7%</strong></td>
+          <td><strong>−25.0%</strong></td>
+      </tr>
+      <tr>
+          <td><strong>p99 latency</strong></td>
+          <td>15.743 ms</td>
+          <td>4.047 ms</td>
+          <td><strong>2.319 ms</strong></td>
+          <td><strong>−85.3%</strong></td>
+          <td><strong>−42.7%</strong></td>
+      </tr>
+  </tbody>
+</table>
+<p><strong>Pipelined GET (pipeline = 30, pre-populated)</strong> — 64 threads × 10 connections · pipeline = 30 · ratio 0:1 · 256B values · 100 seconds · 10M keys pre-populated</p>
+<table>
+  <thead>
+      <tr>
+          <th>Metric</th>
+          <th>Redis †</th>
+          <th>Dragonfly</th>
+          <th>VortexKV</th>
+          <th>vs Redis</th>
+          <th>vs Dragonfly</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><strong>Ops/sec</strong></td>
+          <td>558,308</td>
+          <td>2,688,873</td>
+          <td><strong>9,889,346</strong></td>
+          <td><strong>17.7×</strong></td>
+          <td><strong>3.68×</strong></td>
+      </tr>
+      <tr>
+          <td><strong>Avg latency</strong></td>
+          <td>8.592 ms</td>
+          <td>7.140 ms</td>
+          <td><strong>1.918 ms</strong></td>
+          <td><strong>−77.7%</strong></td>
+          <td><strong>−73.1%</strong></td>
+      </tr>
+      <tr>
+          <td><strong>p99 latency</strong></td>
+          <td>17.023 ms</td>
+          <td>7.807 ms</td>
+          <td><strong>2.655 ms</strong></td>
+          <td><strong>−84.4%</strong></td>
+          <td><strong>−66.0%</strong></td>
+      </tr>
+  </tbody>
+</table>
+<blockquote>
+<p>† Redis was run at its optimal 16-thread × 10-connection config for the pipelined tests. Redis executes commands on a single thread, so adding more threads doesn&rsquo;t improve its execution throughput — this gives Redis its best showing rather than handicapping it.</p>
+</blockquote>
+<blockquote>
+<p><strong>Takeaway:</strong> Under pipelining, VortexKV&rsquo;s shared-nothing design with per-shard databases pulls clearly ahead. Pipelined SET is <strong>60% faster</strong> than Dragonfly; pipelined GET is <strong>3.7× faster</strong> — the largest gap in the entire suite.</p>
+</blockquote>
+<h3 id="an-anomaly-worth-chasing-why-were-writes-outpacing-reads">An anomaly worth chasing: why were writes outpacing reads?<a hidden class="anchor" aria-hidden="true" href="#an-anomaly-worth-chasing-why-were-writes-outpacing-reads">#</a></h3>
+<p>One interesting thing to note here is the difference in SET vs GET numbers. Both VortexKV and Dragonfly achieve higher SET ops, which feels like an anomaly — it should be the exact opposite, especially for Dragonfly. I thought something was wrong, so I ran the benchmarks again, not just on this EPYC server but on two other machines as well: a C3D GCP instance and my own Ryzen laptop. The trend was similar.</p>
+<p>Knowing my own architecture, I had a suspicion that might be true for Dragonfly as well — and that was the extra copy required in the response pipeline I mentioned earlier. For any SET request, the incoming data is passed directly using <code>string_view</code> to the target shard, where it&rsquo;s copied once into the hash table entry, and we respond with a small <code>+OK\r\n</code> (5 bytes). That response data needs to be passed to the caller&rsquo;s shard, for which we first copy into a temporary buffer, then copy to the network to preserve ordering. For a GET response, we again send the data directly, but of course there&rsquo;s no copying into the hash table entry — what&rsquo;s different is that the response data is now much bigger (256 bytes in our benchmarks).</p>
+<p>Maybe Dragonfly was experiencing something similar, but worse. So I simply changed the data size in the benchmarks from 256 bytes to 8 bytes, and — boom — now Dragonfly&rsquo;s GETs were as fast as its SETs. To make sure, I read some of Dragonfly&rsquo;s code to see what was going on: for a GET response, Dragonfly first creates a temporary string on the target shard (so a heap alloc plus a copy), then this string object is passed to the caller, where it&rsquo;s read again (from the target&rsquo;s memory, which is more costly for multi-CCD CPUs) and copied to the output buffer. If we reduce the data size, this string is now inlined — so no heap alloc, and the copy is significantly cheaper — resulting in better numbers.</p>
+<h3 id="scaling">Scaling<a hidden class="anchor" aria-hidden="true" href="#scaling">#</a></h3>
+<p><strong>Shard scaling (1:1 SET:GET, no pipeline)</strong> — 256B values · 25 seconds · client threads scaled proportionally to server shards</p>
+<table>
+  <thead>
+      <tr>
+          <th>Shards</th>
+          <th>Dragonfly (ops/sec)</th>
+          <th>VortexKV (ops/sec)</th>
+          <th>Δ</th>
+          <th>Dragonfly p99</th>
+          <th>VortexKV p99</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>1</td>
+          <td><strong>83,664</strong></td>
+          <td>73,510</td>
+          <td>−12.1%</td>
+          <td><strong>0.287 ms</strong></td>
+          <td>0.295 ms</td>
+      </tr>
+      <tr>
+          <td>4</td>
+          <td><strong>311,311</strong></td>
+          <td>287,612</td>
+          <td>−7.6%</td>
+          <td><strong>0.367 ms</strong></td>
+          <td>0.415 ms</td>
+      </tr>
+      <tr>
+          <td>16</td>
+          <td><strong>1,064,231</strong></td>
+          <td>959,061</td>
+          <td>−9.9%</td>
+          <td><strong>0.415 ms</strong></td>
+          <td>0.447 ms</td>
+      </tr>
+      <tr>
+          <td>32</td>
+          <td><strong>1,736,663</strong></td>
+          <td>1,572,802</td>
+          <td>−9.4%</td>
+          <td><strong>0.559 ms</strong></td>
+          <td>0.575 ms</td>
+      </tr>
+      <tr>
+          <td>64</td>
+          <td>2,403,368</td>
+          <td><strong>2,551,297</strong></td>
+          <td><strong>+6.2%</strong></td>
+          <td>0.351 ms</td>
+          <td>0.351 ms</td>
+      </tr>
+  </tbody>
+</table>
+<p><img alt="Shard scaling: VortexKV vs Dragonfly" loading="lazy" src="/images/shard_scaling.svg"></p>
+<p>At 1–32 shards, Dragonfly leads by 8–12%. I don&rsquo;t have a precise breakdown of where that comes from, but it&rsquo;s likely from a more mature implementation. The 1-shard count is an especially interesting case, since this configuration makes both systems act like a single-threaded cache (no cross-shard ops). This lead might be coming from their helio I/O framework, plus years of profiling-driven micro-optimization on a mature codebase.</p>
+<p>At 64 shards the relationship inverts. Dragonfly wraps every command — even single-key ops — in a Transaction object, the machinery that gives them lock-free atomic multi-key operations (something VortexKV deliberately doesn&rsquo;t support). That per-command cost is a fair price for a feature I skipped, and skipping it is likely part of why my lighter path scales better at full saturation.</p>
+<blockquote>
+<p><strong>Note:</strong> This scaling test is unpipelined on purpose, to isolate how cleanly each architecture scales with core count rather than to measure peak throughput. The pipelined numbers earlier are the throughput <em>ceiling</em>; this is the scaling <em>shape</em>. The +6.2% here isn&rsquo;t the same claim as the 3.7× there — one is &ldquo;scales better at saturation,&rdquo; the other is &ldquo;higher peak under load.&rdquo;</p>
+</blockquote>
+<h2 id="limitations">Limitations<a hidden class="anchor" aria-hidden="true" href="#limitations">#</a></h2>
+<p>VortexKV is specialized, and not complete. A few honest categories of what&rsquo;s missing and why:</p>
+<p><strong>Multi-key DEL/EXISTS.</strong> These existed in the single-threaded version — since everything was in a single table, they were easy. As soon as we move to the sharded architecture, a single multi-key request can span multiple shards. This makes these ops non-trivial: every multi-key operation now needs to account for results from multiple shards, something similar to how we handle pipelined requests. The implementation is not only genuinely hard, it also introduces extra work that would hurt throughput — counterintuitive to what I&rsquo;m trying to build. So I gave up a feature I&rsquo;d already had working.</p>
+<p><strong>Persistence, replication, AUTH, and TLS</strong> aren&rsquo;t here either — but those are production-completeness features, and VortexKV is a study of the hot path, not a production-ready Redis replacement. They were out of scope by design.</p>
+<p><strong>Data types beyond strings and integers</strong> were left out because I refuse to ship a type that isn&rsquo;t optimized. I initially did have plans to support more types — you can actually see the remnants of this in the hash table&rsquo;s value type, which uses a <code>std::variant</code> (for just string and int, a custom union would be better). Take lists, for example: I could have added the feature backed internally by a <code>std::vector</code>; it was trivial enough. But shipping a slow data structure in a project that&rsquo;s <em>about</em> data-structure performance would contradict the entire point. I&rsquo;d rather ship two data types I&rsquo;m proud of than ten I&rsquo;m not.</p>
+<h2 id="try-it-yourself">Try it yourself<a hidden class="anchor" aria-hidden="true" href="#try-it-yourself">#</a></h2>
+<p>And that&rsquo;s how a single-person side project ends up at 9.9M pipelined GETs/sec — not by out-engineering a seasoned team, but by refusing to pay for features I didn&rsquo;t need and optimizing wherever I could. VortexKV, the full source, and reproducible benchmarks are all on GitHub: <strong><a href="https://github.com/shashank2602/VortexKV">github.com/shashank2602/VortexKV</a></strong>.</p>
+<p>I&rsquo;m currently open to C++ roles. The best way to reach me is by email at <a href="mailto:shashankjoshi2602@gmail.com">shashankjoshi2602@gmail.com</a> or on <a href="https://www.linkedin.com/in/shashank26/">LinkedIn</a>.</p>
+
+
+  </div>
+
+  <footer class="post-footer">
+    <ul class="post-tags">
+      <li><a href="http://localhost:1313/tags/cpp/">Cpp</a></li>
+      <li><a href="http://localhost:1313/tags/systems/">Systems</a></li>
+      <li><a href="http://localhost:1313/tags/performance/">Performance</a></li>
+      <li><a href="http://localhost:1313/tags/databases/">Databases</a></li>
+    </ul>
+
+<ul class="share-buttons">
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share VortexKV: a multithreaded key-value store in C&#43;&#43;20 on x"
+            href="https://x.com/intent/tweet/?text=VortexKV%3a%20a%20multithreaded%20key-value%20store%20in%20C%2b%2b20&amp;url=http%3a%2f%2flocalhost%3a1313%2fposts%2fvortexkv%2f&amp;hashtags=cpp%2csystems%2cperformance%2cdatabases">
+            <svg version="1.1" viewBox="0 0 512 512" xml:space="preserve" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M512 62.554 L 512 449.446 C 512 483.97 483.97 512 449.446 512 L 62.554 512 C 28.03 512 0 483.97 0 449.446 L 0 62.554 C 0 28.03 28.029 0 62.554 0 L 449.446 0 C 483.971 0 512 28.03 512 62.554 Z M 269.951 190.75 L 182.567 75.216 L 56 75.216 L 207.216 272.95 L 63.9 436.783 L 125.266 436.783 L 235.9 310.383 L 332.567 436.783 L 456 436.783 L 298.367 228.367 L 432.367 75.216 L 371.033 75.216 Z M 127.633 110 L 164.101 110 L 383.481 400.065 L 349.5 400.065 Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share VortexKV: a multithreaded key-value store in C&#43;&#43;20 on linkedin"
+            href="https://www.linkedin.com/shareArticle?mini=true&amp;url=http%3a%2f%2flocalhost%3a1313%2fposts%2fvortexkv%2f&amp;title=VortexKV%3a%20a%20multithreaded%20key-value%20store%20in%20C%2b%2b20&amp;summary=VortexKV%3a%20a%20multithreaded%20key-value%20store%20in%20C%2b%2b20&amp;source=http%3a%2f%2flocalhost%3a1313%2fposts%2fvortexkv%2f">
+            <svg version="1.1" viewBox="0 0 512 512" xml:space="preserve" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-386.892,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Zm-288.985,423.278l0,-225.717l-75.04,0l0,225.717l75.04,0Zm270.539,0l0,-129.439c0,-69.333 -37.018,-101.586 -86.381,-101.586c-39.804,0 -57.634,21.891 -67.617,37.266l0,-31.958l-75.021,0c0.995,21.181 0,225.717 0,225.717l75.02,0l0,-126.056c0,-6.748 0.486,-13.492 2.474,-18.315c5.414,-13.475 17.767,-27.434 38.494,-27.434c27.135,0 38.007,20.707 38.007,51.037l0,120.768l75.024,0Zm-307.552,-334.556c-25.674,0 -42.448,16.879 -42.448,39.002c0,21.658 16.264,39.002 41.455,39.002l0.484,0c26.165,0 42.452,-17.344 42.452,-39.002c-0.485,-22.092 -16.241,-38.954 -41.943,-39.002Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share VortexKV: a multithreaded key-value store in C&#43;&#43;20 on reddit"
+            href="https://reddit.com/submit?url=http%3a%2f%2flocalhost%3a1313%2fposts%2fvortexkv%2f&title=VortexKV%3a%20a%20multithreaded%20key-value%20store%20in%20C%2b%2b20">
+            <svg version="1.1" viewBox="0 0 512 512" xml:space="preserve" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-386.892,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Zm-3.446,265.638c0,-22.964 -18.616,-41.58 -41.58,-41.58c-11.211,0 -21.361,4.457 -28.841,11.666c-28.424,-20.508 -67.586,-33.757 -111.204,-35.278l18.941,-89.121l61.884,13.157c0.756,15.734 13.642,28.29 29.56,28.29c16.407,0 29.706,-13.299 29.706,-29.701c0,-16.403 -13.299,-29.702 -29.706,-29.702c-11.666,0 -21.657,6.792 -26.515,16.578l-69.105,-14.69c-1.922,-0.418 -3.939,-0.042 -5.585,1.036c-1.658,1.073 -2.811,2.761 -3.224,4.686l-21.152,99.438c-44.258,1.228 -84.046,14.494 -112.837,35.232c-7.468,-7.164 -17.589,-11.591 -28.757,-11.591c-22.965,0 -41.585,18.616 -41.585,41.58c0,16.896 10.095,31.41 24.568,37.918c-0.639,4.135 -0.99,8.328 -0.99,12.576c0,63.977 74.469,115.836 166.33,115.836c91.861,0 166.334,-51.859 166.334,-115.836c0,-4.218 -0.347,-8.387 -0.977,-12.493c14.564,-6.47 24.735,-21.034 24.735,-38.001Zm-119.474,108.193c-20.27,20.241 -59.115,21.816 -70.534,21.816c-11.428,0 -50.277,-1.575 -70.522,-21.82c-3.007,-3.008 -3.007,-7.882 0,-10.889c3.003,-2.999 7.882,-3.003 10.885,0c12.777,12.781 40.11,17.317 59.637,17.317c19.522,0 46.86,-4.536 59.657,-17.321c3.016,-2.999 7.886,-2.995 10.885,0.008c3.008,3.011 3.003,7.882 -0.008,10.889Zm-5.23,-48.781c-16.373,0 -29.701,-13.324 -29.701,-29.698c0,-16.381 13.328,-29.714 29.701,-29.714c16.378,0 29.706,13.333 29.706,29.714c0,16.374 -13.328,29.698 -29.706,29.698Zm-160.386,-29.702c0,-16.381 13.328,-29.71 29.714,-29.71c16.369,0 29.689,13.329 29.689,29.71c0,16.373 -13.32,29.693 -29.689,29.693c-16.386,0 -29.714,-13.32 -29.714,-29.693Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share VortexKV: a multithreaded key-value store in C&#43;&#43;20 on facebook"
+            href="https://facebook.com/sharer/sharer.php?u=http%3a%2f%2flocalhost%3a1313%2fposts%2fvortexkv%2f">
+            <svg version="1.1" viewBox="0 0 512 512" xml:space="preserve" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-106.468,0l0,-192.915l66.6,0l12.672,-82.621l-79.272,0l0,-53.617c0,-22.603 11.073,-44.636 46.58,-44.636l36.042,0l0,-70.34c0,0 -32.71,-5.582 -63.982,-5.582c-65.288,0 -107.96,39.569 -107.96,111.204l0,62.971l-72.573,0l0,82.621l72.573,0l0,192.915l-191.104,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share VortexKV: a multithreaded key-value store in C&#43;&#43;20 on whatsapp"
+            href="https://api.whatsapp.com/send?text=VortexKV%3a%20a%20multithreaded%20key-value%20store%20in%20C%2b%2b20%20-%20http%3a%2f%2flocalhost%3a1313%2fposts%2fvortexkv%2f">
+            <svg version="1.1" viewBox="0 0 512 512" xml:space="preserve" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M449.446,0c34.525,0 62.554,28.03 62.554,62.554l0,386.892c0,34.524 -28.03,62.554 -62.554,62.554l-386.892,0c-34.524,0 -62.554,-28.03 -62.554,-62.554l0,-386.892c0,-34.524 28.029,-62.554 62.554,-62.554l386.892,0Zm-58.673,127.703c-33.842,-33.881 -78.847,-52.548 -126.798,-52.568c-98.799,0 -179.21,80.405 -179.249,179.234c-0.013,31.593 8.241,62.428 23.927,89.612l-25.429,92.884l95.021,-24.925c26.181,14.28 55.659,21.807 85.658,21.816l0.074,0c98.789,0 179.206,-80.413 179.247,-179.243c0.018,-47.895 -18.61,-92.93 -52.451,-126.81Zm-126.797,275.782l-0.06,0c-26.734,-0.01 -52.954,-7.193 -75.828,-20.767l-5.441,-3.229l-56.386,14.792l15.05,-54.977l-3.542,-5.637c-14.913,-23.72 -22.791,-51.136 -22.779,-79.287c0.033,-82.142 66.867,-148.971 149.046,-148.971c39.793,0.014 77.199,15.531 105.329,43.692c28.128,28.16 43.609,65.592 43.594,105.4c-0.034,82.149 -66.866,148.983 -148.983,148.984Zm81.721,-111.581c-4.479,-2.242 -26.499,-13.075 -30.604,-14.571c-4.105,-1.495 -7.091,-2.241 -10.077,2.241c-2.986,4.483 -11.569,14.572 -14.182,17.562c-2.612,2.988 -5.225,3.364 -9.703,1.12c-4.479,-2.241 -18.91,-6.97 -36.017,-22.23c-13.314,-11.876 -22.304,-26.542 -24.916,-31.026c-2.612,-4.484 -0.279,-6.908 1.963,-9.14c2.016,-2.007 4.48,-5.232 6.719,-7.847c2.24,-2.615 2.986,-4.484 4.479,-7.472c1.493,-2.99 0.747,-5.604 -0.374,-7.846c-1.119,-2.241 -10.077,-24.288 -13.809,-33.256c-3.635,-8.733 -7.327,-7.55 -10.077,-7.688c-2.609,-0.13 -5.598,-0.158 -8.583,-0.158c-2.986,0 -7.839,1.121 -11.944,5.604c-4.105,4.484 -15.675,15.32 -15.675,37.364c0,22.046 16.048,43.342 18.287,46.332c2.24,2.99 31.582,48.227 76.511,67.627c10.685,4.615 19.028,7.371 25.533,9.434c10.728,3.41 20.492,2.929 28.209,1.775c8.605,-1.285 26.499,-10.833 30.231,-21.295c3.732,-10.464 3.732,-19.431 2.612,-21.298c-1.119,-1.869 -4.105,-2.99 -8.583,-5.232Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share VortexKV: a multithreaded key-value store in C&#43;&#43;20 on telegram"
+            href="https://telegram.me/share/url?text=VortexKV%3a%20a%20multithreaded%20key-value%20store%20in%20C%2b%2b20&amp;url=http%3a%2f%2flocalhost%3a1313%2fposts%2fvortexkv%2f">
+            <svg version="1.1" xml:space="preserve" viewBox="2 2 28 28" height="30px" width="30px" fill="currentColor">
+                <path
+                    d="M26.49,29.86H5.5a3.37,3.37,0,0,1-2.47-1,3.35,3.35,0,0,1-1-2.47V5.48A3.36,3.36,0,0,1,3,3,3.37,3.37,0,0,1,5.5,2h21A3.38,3.38,0,0,1,29,3a3.36,3.36,0,0,1,1,2.46V26.37a3.35,3.35,0,0,1-1,2.47A3.38,3.38,0,0,1,26.49,29.86Zm-5.38-6.71a.79.79,0,0,0,.85-.66L24.73,9.24a.55.55,0,0,0-.18-.46.62.62,0,0,0-.41-.17q-.08,0-16.53,6.11a.59.59,0,0,0-.41.59.57.57,0,0,0,.43.52l4,1.24,1.61,4.83a.62.62,0,0,0,.63.43.56.56,0,0,0,.4-.17L16.54,20l4.09,3A.9.9,0,0,0,21.11,23.15ZM13.8,20.71l-1.21-4q8.72-5.55,8.78-5.55c.15,0,.23,0,.23.16a.18.18,0,0,1,0,.06s-2.51,2.3-7.52,6.8Z" />
+            </svg>
+        </a>
+    </li>
+    <li>
+        <a target="_blank" rel="noopener noreferrer" aria-label="share VortexKV: a multithreaded key-value store in C&#43;&#43;20 on ycombinator"
+            href="https://news.ycombinator.com/submitlink?t=VortexKV%3a%20a%20multithreaded%20key-value%20store%20in%20C%2b%2b20&u=http%3a%2f%2flocalhost%3a1313%2fposts%2fvortexkv%2f">
+            <svg version="1.1" xml:space="preserve" width="30px" height="30px" viewBox="0 0 512 512" fill="currentColor"
+                xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">
+                <path
+                    d="M449.446 0C483.971 0 512 28.03 512 62.554L512 449.446C512 483.97 483.97 512 449.446 512L62.554 512C28.03 512 0 483.97 0 449.446L0 62.554C0 28.03 28.029 0 62.554 0L449.446 0ZM183.8767 87.9921H121.8427L230.6673 292.4508V424.0079H281.3328V292.4508L390.1575 87.9921H328.1233L256 238.2489z" />
+            </svg>
+        </a>
+    </li>
+</ul>
+
+  </footer>
+</article>
+    </main>
+    
+<footer class="footer">
+        <span>&copy; 2026 <a href="http://localhost:1313/">Shashank Joshi</a></span> · 
+
+    
+    
+    <span>
+        Powered by
+        <a href="https://gohugo.io/?utm_source=papermod" rel="noopener" target="_blank">Hugo</a> &
+        <a href="https://github.com/adityatelange/hugo-PaperMod/" rel="noopener" target="_blank">PaperMod</a>
+    </span>
+</footer>
+<a href="#top" id="top-link" class="top-link hidden" aria-label="go to top" title="Go to Top (Alt + G)" accesskey="g">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" class="feather feather-chevrons-up">
+        <polyline points="17 11 12 6 7 11"></polyline>
+        <polyline points="17 18 12 13 7 18"></polyline>
+    </svg>
+</a>
+
+<script>
+    let menu = document.getElementById('menu');
+    if (menu) {
+        
+        const scrollPosition = localStorage.getItem("menu-scroll-position");
+        if (scrollPosition) {
+            menu.scrollLeft = parseInt(scrollPosition, 10);
+        }
+        
+        menu.onscroll = function () {
+            localStorage.setItem("menu-scroll-position", menu.scrollLeft);
+        }
+    }
+
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener("click", function (e) {
+            e.preventDefault();
+            var id = this.getAttribute("href").substr(1);
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({
+                    behavior: "smooth"
+                });
+            } else {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();
+            }
+            if (id === "top") {
+                history.replaceState(null, null, " ");
+            } else {
+                history.pushState(null, null, `#${id}`);
+            }
+        });
+    });
+
+</script>
+<script>
+    var toplink = document.getElementById("top-link");
+    window.onscroll = function () {
+        const scrollThreshold = window.innerHeight;
+        if (document.body.scrollTop > scrollThreshold || document.documentElement.scrollTop > scrollThreshold) {
+            toplink.classList.remove("hidden");
+        } else {
+            toplink.classList.add("hidden");
+        }
+    };
+
+</script>
+<script>
+    document.getElementById("theme-toggle").addEventListener("click", () => {
+        const html = document.querySelector("html");
+        if (html.dataset.theme === "dark") {
+            html.dataset.theme = 'light';
+            localStorage.setItem("pref-theme", 'light');
+        } else {
+            html.dataset.theme = 'dark';
+            localStorage.setItem("pref-theme", 'dark');
+        }
+    })
+
+</script>
+<script>
+    document.querySelectorAll('pre > code').forEach((codeblock) => {
+        const container = codeblock.parentNode.parentNode;
+
+        const copybutton = document.createElement('button');
+        copybutton.classList.add('copy-code');
+        copybutton.innerHTML = 'copy';
+
+        function copyingDone() {
+            copybutton.innerHTML = 'copied!';
+            setTimeout(() => {
+                copybutton.innerHTML = 'copy';
+            }, 2000);
+        }
+
+        copybutton.addEventListener('click', (cb) => {
+            if ('clipboard' in navigator) {
+                navigator.clipboard.writeText(codeblock.textContent);
+                copyingDone();
+                return;
+            }
+
+            const range = document.createRange();
+            range.selectNodeContents(codeblock);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+            try {
+                document.execCommand('copy');
+                copyingDone();
+            } catch (e) { };
+            selection.removeRange(range);
+        });
+
+        if (container.classList.contains("highlight")) {
+            container.appendChild(copybutton);
+        } else if (container.parentNode.firstChild == container) {
+            
+        } else if (codeblock.parentNode.parentNode.parentNode.parentNode.parentNode.nodeName == "TABLE") {
+            
+            codeblock.parentNode.parentNode.parentNode.parentNode.parentNode.appendChild(copybutton);
+        } else {
+            
+            codeblock.parentNode.appendChild(copybutton);
+        }
+    });
+</script>
+</body>
+
+</html>
