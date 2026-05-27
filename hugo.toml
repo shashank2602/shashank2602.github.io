@@ -1,5 +1,5 @@
 baseURL = "https://shashank2602.github.io/"
-locale = "en-us"
+languageCode = "en-us"
 title = "Shashank Joshi"
 theme = "PaperMod"
 
@@ -10,7 +10,7 @@ theme = "PaperMod"
   ShowCodeCopyButtons = true
   ShowToc = true                 # table of contents on long posts
   homeInfoParams.Title = "Shashank Joshi"
-  homeInfoParams.Content = "Senior C++ engineer. I build fast systems and write about how. 5+ years of experience; currently open to C++ roles."
+  homeInfoParams.Content = "C++ engineer. I build fast systems from scratch and write about the decisions behind them. 5 years of experience, based in India (IST), open to remote C++ roles."
 
   [[params.socialIcons]]
     name = "github"
