@@ -25,9 +25,9 @@ For the first iteration of this project, everything ran on a single thread: the 
 
 It was essential that I create a fast storage engine, since that would be the backbone of the system. Modern systems rely heavily on CPU caches for their speed, so if I could choose data structures that take full advantage of these, I could see a performance improvement. The core of this storage engine is a hash table, which stores the actual KV entries.
 
-Most implementations of hash tables (like C++'s `std::unordered_map`) use separate chaining. While this has its advantages, it also comes at the cost of poor cache locality. Since each entry is its own separate node, each pointer jump risks a cache miss. So if you need to probe, say, 4 times for an entry, the CPU will read 4 separate 64-byte cache lines that can be scattered across memory. This leads to poor performance. This is what Redis uses. The other end of the spectrum is open addressing, where everything is laid out sequentially, and CPUs love sequential data because of the excellent cache usage. This does come with its own disadvantages, but if you want speed, it's the right choice. Dragonfly, by comparison, uses a hybrid approach: their hash table uses separate nodes, but each node is a mini open-addressing hash table itself. So they created an excellent data structure that's faster than the Redis dict while also using less memory. I, on the other hand, went all-in on an open-addressing implementation (Robin Hood), since that should still give the best performance — but comes at the cost of higher memory usage.
+Most implementations of hash tables (like C++'s `std::unordered_map`) use separate chaining to handle collisions. While this has its advantages, it also comes at the cost of poor cache locality. Since each entry is its own separate node, each pointer jump risks a cache miss. So if you need to probe, say, 4 times for an entry, the CPU will read 4 separate 64-byte cache lines that can be scattered across memory. This leads to poor performance. This is what Redis uses. The other way to handle collisions is open addressing, where everything is laid out sequentially, and CPUs love sequential data because of the excellent cache usage. This does come with its own disadvantages, but if you want speed, it's the right choice. Dragonfly, by comparison, uses a hybrid approach: their hash table uses separate nodes, but each node is a mini open-addressing hash table itself. So they created an excellent data structure that's faster than the Redis dict while also using less memory. I, on the other hand, went all-in on an open-addressing implementation, since that should still give the best performance — but comes at the cost of higher memory usage.
 
-The open-addressing implementation I went with is called Robin Hood hashing (my implementation is called FlatMap). After my research, this seemed to serve my purpose best: excellent cache performance with great average seek times. Here's how it works — on a collision, we linearly probe and start checking consecutive slots. Either we find an empty slot, or in the case of an occupied slot we check if the new key is farther away from its home than the current key occupying the slot. If it is, we "rob" the slot from that key and displace it forward.
+The open-addressing technique I went ahead with is called Robin Hood hashing (my implementation is called FlatMap). After my research, this seemed to serve my purpose best: excellent cache performance with great average search times. Here's how it works — on a collision, we linearly probe and start checking consecutive slots. Either we find an empty slot, or in the case of an occupied slot we check if the new key is farther away from its home than the current key occupying the slot. If it is, we "rob" the slot from that key and displace it forward.
 
 ```cpp
 if (newEntryMetadata.psl > m_table.metadata[keyPos].psl)
@@ -40,7 +40,7 @@ if (newEntryMetadata.psl > m_table.metadata[keyPos].psl)
 
 And we keep doing this until we reach an empty slot.
 
-What this does, compared to simple linear probing, is dramatically reduce the variance in probe length. In my testing, even with millions of keys, the average probe length turned out to be around 1 (0 being its home) even at a high load factor of 0.85. These are excellent results. Even the max probe length (worst-case scenario), over tens of iterations with millions of keys, the longest I got was in the 20s.
+What this does, compared to simple linear probing, is it dramatically reduces the variance in probe length. In my testing, even with millions of keys, the average probe length turned out to be around 1 (0 being its home) even at a high load factor of 0.85. These are excellent results. Even the max probe length (worst-case scenario) I got, over tens of iterations with millions of keys, was in the 20s.
 
 Because of the Structure-of-Arrays (SoA) design, the metadata is packed into just 2 bytes per entry. This allows up to 32 entries to reside within a single 64-byte cache line. Consequently, worst-case probes require fetching at most two cache lines to scan the metadata, filtering out 99% of unnecessary key comparisons before the heavier key/value arrays are ever accessed.
 
@@ -60,7 +60,7 @@ This wraps up the core storage engine. Now let's see the overall single-threaded
 
 Let's start with Asio. This is the part of the system responsible for managing TCP connections and IO; it fires when data is read and when data has been written to the network buffer. This is managed by the `io_context` event loop. One thread here is doing all the work — whenever a connection receives a request, the event loop wakes up the thread. It then does the reading, parsing, executing, and writing. Reading and writing operations are both async. Once the writing completes, we start all over again. All the connections reside in the server class.
 
-The crucial part of the system is IO. A system handicapped by IO cannot be scaled properly, no matter how many cores you throw at it. When you're doing millions of operations per second, it's necessary to reduce as many copies and allocations in the pipeline as you can, since these dirty the CPU caches and use up memory bandwidth — other than, of course, just wasting CPU cycles. And that's exactly what I did: the input data that's read into the network buffer is used as-is to create commands using `string_view`, and passed directly to the storage layer to be stored in the hash tables. Similarly, when writing output, it's written directly to the network buffer; any formatting required (like integer-to-string) is done using preallocated stack buffers. So the protocol (RESP) parsing is zero-copy, and protocol writing is zero-allocation.
+A very crucial part of the this system is IO. A system handicapped by IO cannot be scaled properly, no matter how many cores you throw at it. When you're doing millions of operations per second, it's necessary to reduce as many copies and allocations in the pipeline as you can, since these dirty the CPU caches and use up memory bandwidth — other than, of course, just wasting CPU cycles. And that's exactly what I did: the input data that's read into the network buffer is used as-is to create commands using `string_view`, and passed directly to the storage layer to be stored in the hash tables. Similarly, when writing output, it's written directly to the network buffer; any formatting required (like integer-to-string) is done using preallocated stack buffers. So the protocol (RESP) parsing is zero-copy, and protocol writing is zero-allocation.
 
 Both the input and output buffers use a custom linear buffer with compaction, with the output buffer actually consisting of two buffers — one used to write to the network while the other collects responses. This means writes never stall. (When I moved onto the multithreaded architecture, there was an extra copy step that needed to be added — but I'll explain that later.)
 
@@ -78,7 +78,7 @@ Hitting high throughput with pipelining has its use cases, but without pipelinin
 
 A better approach is fine-grained locking, something memcached uses. Essentially, instead of one global lock, you create many small specific locks that each protect separate segments of the hash table. This minimizes lock contention and can result in good throughput scaling — but only up to a point. As the thread count increases, you start running into the same problem again: a higher thread count means higher chances of multiple threads hitting the same locked segment, and so we have the same issue. It goes from near-linear scaling in the beginning to flatlining at higher thread counts.
 
-So what's the answer? It's called a shared-nothing design, and it's used by Dragonfly — for good reason, since it allows for maximum throughput. Let's get into the details.
+So what's the answer? It's called a shared-nothing design, and it's also what Dragonfly uses — for good reason, since it allows for maximum throughput. Let's get into the details.
 
 ## The shared-nothing design
 
@@ -87,6 +87,8 @@ So what's the answer? It's called a shared-nothing design, and it's used by Drag
 In simple terms, we take the one hash table we had and split it into N tables, where N is the number of threads. Each of these N tables, enclosed in an independent entity called a shard, owns a different part of the key space. The distribution is decided using a hash function, with uniform keys resulting in uniform distribution across the N shards. These shards run their own separate event loop in their own separate thread. The shards are cache-line aligned to prevent false sharing, and each shard's thread is pinned to a dedicated CPU core for optimal cache locality.
 
 But now the question is: who takes care of the IO — the main thread, or separate threads? It's the shards themselves. Whenever a new connection is made, it's assigned to one of the shards in round-robin fashion.
+
+So whenever a connection gets a request, we calculate the hash of the key using rapidhash (one of the fastest non-cryptographic hashes), then calculate the fast modulo using libdivide. This gives us the shard ID where the key resides.
 
 ```cpp
 // hash the key, then a fast modulo (via libdivide) gives the owning shard
@@ -102,8 +104,6 @@ else
     m_shardPool[targetShardId]->ExecuteRemote(std::move(request), /* ... */);  // remote: post to owner
 ```
 
-So whenever a connection gets a request, we calculate the hash of the key using rapidhash (one of the fastest non-cryptographic hashes), then calculate the fast modulo using libdivide. This gives us the shard ID where the key resides.
-
 Now there are two possibilities: either the key it requests is in the same shard, or in a different shard. If it's the same shard, the command is executed inline in a fast path. If it's in a different shard, we post this request to the target shard. Once the target shard executes the command asynchronously, it notifies the local shard, and we write to the network buffer.
 
 Now the problem: what happens with pipelined requests? Since these requests can be spread across the shards, they can complete in a random order. Since a client expects pipelined responses back in the same order it sent them, we need to enforce strict ordering of the responses. This is done using request indexes — each request's response is written by the local or remote shard into its own buffer, and each shard posts its completion to the local shard. Once all responses are accounted for, they're copied to the network buffer in their respective order. And because of this ordering requirement, there's an extra copy in the multithreaded architecture.
@@ -112,7 +112,7 @@ So how are cross-shard requests handled internally? When we want to access data 
 
 So while there's no locking mechanism on the hash table itself, the task queue still needs to be protected from corruption by multiple threads. Asio's `io_context` internally uses locks to ensure this thread safety.
 
-There's one additional challenge with cross-shard ops. Each cross-shard op requires a small heap allocation to store the callback — and here's the nasty part: the allocation and deallocation happen on different threads. Shard A allocates the callback, shard B frees it. Then B allocates the completion callback, and A frees it. This is the textbook worst case for a thread-local allocator. My slab allocator assumes alloc and free happen on the same thread — it has no safe answer for a cross-thread free. So I couldn't use it on this path. That leaves two additional heap allocations per cross-shard op (and as shard count increases, so do the cross-shard ops) routed through the generic allocator. That's exactly why I chose mimalloc: it's designed so that freeing memory on a different thread than it was allocated on is cheap. Using it gave me roughly a 20% boost in throughput.
+There's one additional challenge with cross-shard ops. Each cross-shard op requires a small heap allocation to store the callback — and here's the nasty part: the allocation and deallocation happen on different threads. Shard A allocates the callback, shard B frees it. Then B allocates the completion callback, and A frees it. This is the textbook worst case for a thread-local allocator. My slab allocator assumes alloc and free happen on the same thread — it has no safe answer for a cross-thread free. So I couldn't use it on this path. That leaves two additional heap allocations per cross-shard op (and as shard count increases, so do the cross-shard ops) routed through the generic allocator. This meant losing a lot of performance. That's exactly why I chose to use mimalloc: it's designed so that freeing memory on a different thread than it was allocated on is cheap. Using it gave me roughly a 20% boost in throughput.
 
 So what does all this achieve? A system that keeps on scaling even at very high thread counts. Let's see the results.
 
@@ -157,7 +157,7 @@ So what does all this achieve? A system that keeps on scaling even at very high 
 | **Avg latency** | 9.131 ms | 0.253 ms | **0.249 ms** | **−97.3%** | **−1.6%** |
 | **p99 latency** | 9.407 ms | 0.351 ms | **0.343 ms** | **−96.4%** | **−2.3%** |
 
-> **Takeaway:** Without pipelining, VortexKV and Dragonfly are effectively neck-and-neck at ~2.5M ops/sec — both ~36× faster than single-threaded Redis. VortexKV holds a slight latency edge, while Dragonfly is fractionally ahead on raw GET throughput (−0.4%).
+> **Takeaway:** Without pipelining, VortexKV and Dragonfly are effectively neck-and-neck at ~2.5M ops/sec — both ~36× faster than single-threaded Redis.
 
 ### With pipelining
 
@@ -179,13 +179,13 @@ So what does all this achieve? A system that keeps on scaling even at very high 
 
 > † Redis was run at its optimal 16-thread × 10-connection config for the pipelined tests. Redis executes commands on a single thread, so adding more threads doesn't improve its execution throughput — this gives Redis its best showing rather than handicapping it.
 
-> **Takeaway:** Under pipelining, VortexKV's shared-nothing design with per-shard databases pulls clearly ahead. Pipelined SET is **60% faster** than Dragonfly; pipelined GET is **3.7× faster** — the largest gap in the entire suite.
+> **Takeaway:** Under pipelining, VortexKV pulls clearly ahead. Pipelined SET is **60% faster** than Dragonfly; pipelined GET is **3.7× faster** — the largest gap in the entire suite.
 
 ### An anomaly worth chasing: why were writes outpacing reads?
 
 One interesting thing to note here is the difference in SET vs GET numbers. Both VortexKV and Dragonfly achieve higher SET ops, which feels like an anomaly — it should be the exact opposite, especially for Dragonfly. I thought something was wrong, so I ran the benchmarks again, not just on this EPYC server but on two other machines as well: a C3D GCP instance and my own Ryzen laptop. The trend was similar.
 
-Knowing my own architecture, I had a suspicion that might be true for Dragonfly as well — and that was the extra copy required in the response pipeline I mentioned earlier. For any SET request, the incoming data is passed directly using `string_view` to the target shard, where it's copied once into the hash table entry, and we respond with a small `+OK\r\n` (5 bytes). That response data needs to be passed to the caller's shard, for which we first copy into a temporary buffer, then copy to the network to preserve ordering. For a GET response, we again send the data directly, but of course there's no copying into the hash table entry — what's different is that the response data is now much bigger (256 bytes in our benchmarks).
+Knowing my own architecture, I had a suspicion that might be true for Dragonfly as well — and that was the extra copy required in the response pipeline I mentioned earlier. For any SET request, the incoming data is passed directly using `string_view` to the target shard, where it's copied once into the hash table entry, and we respond with a small `+OK\r\n` (5 bytes). That response data needs to be passed to the caller's shard, for which we first copy into a temporary buffer, then copy to the network to preserve ordering. For a GET response, we again send the data directly, but of course there's no copying into the hash table entry — what's different is that the response data is now much bigger, equal to the value size (256 bytes in our benchmarks).
 
 Maybe Dragonfly was experiencing something similar, but worse. So I simply changed the data size in the benchmarks from 256 bytes to 8 bytes, and — boom — now Dragonfly's GETs were as fast as its SETs. To make sure, I read some of Dragonfly's code to see what was going on: for a GET response, Dragonfly first creates a temporary string on the target shard (so a heap alloc plus a copy), then this string object is passed to the caller, where it's read again (from the target's memory, which is more costly for multi-CCD CPUs) and copied to the output buffer. If we reduce the data size, this string is now inlined — so no heap alloc, and the copy is significantly cheaper — resulting in better numbers.
 
@@ -217,7 +217,13 @@ VortexKV is specialized, and not complete. A few honest categories of what's mis
 
 **Persistence, replication, AUTH, and TLS** aren't here either — but those are production-completeness features, and VortexKV is a study of the hot path, not a production-ready Redis replacement. They were out of scope by design.
 
-**Data types beyond strings and integers** were left out because I refuse to ship a type that isn't optimized. I initially did have plans to support more types — you can actually see the remnants of this in the hash table's value type, which uses a `std::variant` (for just string and int, a custom union would be better). Take lists, for example: I could have added the feature backed internally by a `std::vector`; it was trivial enough. But shipping a slow data structure in a project that's *about* data-structure performance would contradict the entire point. I'd rather ship two data types I'm proud of than ten I'm not.
+**Data types beyond strings and integers** were left out because I refuse to ship a type that isn't optimized. I initially did have plans to support more types — you can actually see the remnants of this in the hash table's value type, which uses a `std::variant` (for just string and int, a custom union would be better). Take lists, for example: I could have added the feature backed internally by a `std::vector`; it was trivial enough. But shipping a slow data structure in a project that's *about* data-structure performance would contradict the entire point.
+
+## Future work
+
+The next big thing on the roadmap is a more efficient cross-shard communication mechanism. The current one, with its lock-based task queues and extra heap allocations, is a bottleneck that gets worse as shard count increases. I plan to implement custom lock-free queues for the cross-shard task posting specifically, rather than routing it through Asio's queue (the network I/O would stay on Asio). I haven't settled on the exact design yet, but per shard it'll be either one MPMC queue or N−1 SPSC queues. The MPMC design is simpler but has more contention; the SPSC design uses more memory (quadratic with shard count) but should be faster. I'll be testing both.
+
+This should improve cross-shard performance, since it avoids the lock contention on the critical path — and depending on the queue design, can remove the per-op heap allocation too. It should also help scaling at higher shard counts, where cross-shard ops are both more frequent and more expensive.
 
 ## Try it yourself
 
